@@ -1,27 +1,22 @@
 {
-  "name": "jalsuddhi",
-  "version": "0.1.0",
+  "name": "your-project",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --webpack",
-    "build": "next build --webpack",
+    "dev": "next dev",
+    "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint . --ext .js,.jsx,.ts,.tsx"
   },
   "dependencies": {
-    "firebase": "^12.4.0",
-    "framer-motion": "^12.23.24",
-    "lucide-react": "^0.548.0",
-    "next": "^16.0.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "react-joystick-component": "^6.2.1"
+    "next": "^14.2.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "babel-plugin-react-compiler": "1.0.0",
-    "eslint": "^9",
-    "eslint-config-next": "16.0.0",
-    "tailwindcss": "^4"
+    "eslint": "^9.13.0",
+    "@eslint/object-schema": "^3.1.0",
+    "@eslint/config-array": "^3.0.0",
+    "prettier": "^3.2.0"
   }
 }
