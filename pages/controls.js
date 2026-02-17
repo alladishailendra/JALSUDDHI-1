@@ -3,11 +3,36 @@ import { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { useRouter } from "next/router";
 
+/* ===================== CLOUD ===================== */
+const CLOUD_URL = "https://jalsuddhi-1.onrender.com";
+
+if (typeof window !== "undefined") {
+  const _fetch = window.fetch.bind(window);
+  window.fetch = (url, options) => {
+    // If absolute URL, forward as-is
+    if (typeof url === "string" && url.startsWith("http")) {
+      return _fetch(url, options);
+    }
+
+    // If calling our Next API routes, keep local
+    if (typeof url === "string" && url.startsWith("/api")) {
+      return _fetch(url, options);
+    }
+
+    // Route any client-side `/update` calls through the Next API proxy
+    if (typeof url === "string" && (url === "/update" || url.startsWith("/update?"))) {
+      return _fetch(`/api/update${url.slice(7) || ""}`, options);
+    }
+
+    // Default: proxy non-absolute paths to the cloud URL (existing behavior)
+    return _fetch(`${CLOUD_URL}${url}`, options);
+  };
+}
+/* ================================================= */
+
 export default function Controls() {
   const router = useRouter();
 
-  const [espIp, setEspIp] = useState("");
-  const [camIp, setCamIp] = useState("");
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
 
@@ -17,82 +42,88 @@ export default function Controls() {
     turbidity: "--",
   });
 
-  const [accelerator, setAccelerator] = useState(50); // 0-100%
+  const [accelerator, setAccelerator] = useState(50);
   const speedRef = useRef(0);
   const speedInterval = useRef(null);
 
-  /* Load saved IPs */
+  /* ===================== CONNECTION STATUS ===================== */
   useEffect(() => {
-    const savedEsp = localStorage.getItem("espIp");
-    const savedCam = localStorage.getItem("camIp");
-    if (savedEsp) setEspIp(savedEsp);
-    if (savedCam) setCamIp(savedCam);
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch("/status", { cache: "no-store" });
+        const data = await res.json();
+        setConnected(data.online);
+      } catch {
+        setConnected(false);
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
   }, []);
+  /* ============================================================= */
 
-  /* Connect to ESP */
+  /* ===================== CONNECT BUTTON ===================== */
   const handleConnect = async () => {
-    if (!espIp || !camIp) {
-      alert("Please enter both IP addresses!");
-      return;
-    }
-
     setConnecting(true);
     try {
-      const res = await fetch(`${espIp}/ping`, { method: "GET", cache: "no-store" });
-      if (!res.ok) throw new Error("ESP not reachable");
-
-      localStorage.setItem("espIp", espIp);
-      localStorage.setItem("camIp", camIp);
+      const res = await fetch("/status", { cache: "no-store" });
+      const data = await res.json();
+      if (!data.online) throw new Error();
       setConnected(true);
-    } catch (err) {
-      alert("❌ ESP32 not reachable. Check WiFi & IP.");
-      setConnected(false);
+    } catch {
+      alert("❌ ESP is offline");
     } finally {
       setConnecting(false);
     }
   };
+  /* =========================================================== */
 
-  /* Send motor command with speed & accelerator */
-  const sendCommand = (dir) => {
-    if (!connected) return;
-
-    clearInterval(speedInterval.current);
-    speedRef.current = 0;
-
-    // Accelerate gradually, multiplied by accelerator slider
-    speedInterval.current = setInterval(() => {
-      if (speedRef.current < 100) speedRef.current += 5;
-      const finalSpeed = Math.round((speedRef.current * accelerator) / 100);
-      fetch(`${espIp}/move?dir=${dir}&speed=${finalSpeed}`).catch(() => {});
-    }, 100);
-  };
-
-  const stopMovement = () => {
-    clearInterval(speedInterval.current);
-    speedRef.current = 0;
-    fetch(`${espIp}/move?dir=stop&speed=0`).catch(() => {});
-  };
-
-  /* Servo */
-  const handleServo = (angle) => {
-    if (!connected) return;
-    fetch(`${espIp}/servo?angle=${angle}`).catch(() => {});
-  };
-
-  /* Sensor polling */
+  /* ===================== SENSOR POLLING ===================== */
   useEffect(() => {
     if (!connected) return;
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${espIp}/sensor`, { cache: "no-store" });
+        const res = await fetch("/telemetry", { cache: "no-store" });
         const data = await res.json();
         setSensorData(data);
       } catch {}
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [connected, espIp]);
+  }, [connected]);
+  /* =========================================================== */
+
+  /* ===================== MOTOR ===================== */
+  const sendCommand = (dir) => {
+    if (!connected) return;
+
+    clearInterval(speedInterval.current);
+    speedRef.current = 0;
+
+    speedInterval.current = setInterval(() => {
+      if (speedRef.current < 100) speedRef.current += 5;
+      const finalSpeed = Math.round((speedRef.current * accelerator) / 100);
+      // Map local move requests to the bot-command proxy. Arduino expects commands like "forward","left","right","back","stop"
+      const cmd = dir === 'backward' ? 'back' : dir;
+      fetch(`/api/bot-command?cmd=${encodeURIComponent(cmd)}&speed=${finalSpeed}`).catch(() => {});
+    }, 100);
+  };
+
+  const stopMovement = () => {
+    clearInterval(speedInterval.current);
+    speedRef.current = 0;
+    fetch(`/api/bot-command?cmd=stop&speed=0`).catch(() => {});
+  };
+  /* ================================================= */
+
+  /* ===================== SERVO ===================== */
+  const handleServo = (angle) => {
+    if (!connected) return;
+    // Send servo command via bot-command proxy. Format: cmd=servo:angle (your ESP code can parse this if implemented server-side)
+    fetch(`/api/bot-command?cmd=${encodeURIComponent('servo:' + angle)}`).catch(() => {});
+  };
+  /* ================================================= */
 
   return (
     <div className="relative min-h-screen bg-gradient-to-br from-black via-blue-900 to-cyan-900 text-white overflow-y-auto">
@@ -123,32 +154,12 @@ export default function Controls() {
         🤖 JAL-SUDDHI BOT CONTROL CENTER
       </motion.h1>
 
-      {/* IP INPUTS */}
-      <div className="mt-6 flex flex-col md:flex-row justify-center items-center gap-4 bg-black/40 p-4 rounded-2xl mx-auto w-fit backdrop-blur-md">
-        <div>
-          <label className="text-sm text-cyan-200">ESP32 Bot IP</label>
-          <input
-            value={espIp}
-            onChange={(e) => setEspIp(e.target.value)}
-            placeholder="http://192.168.4.1"
-            className="block w-64 px-3 py-2 mt-1 rounded-md bg-transparent border border-cyan-500 text-white placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-cyan-400"
-          />
-        </div>
-
-        <div>
-          <label className="text-sm text-cyan-200">ESP32-CAM IP</label>
-          <input
-            value={camIp}
-            onChange={(e) => setCamIp(e.target.value)}
-            placeholder="http://192.168.4.2"
-            className="block w-64 px-3 py-2 mt-1 rounded-md bg-transparent border border-cyan-500 text-white placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-cyan-400"
-          />
-        </div>
-
+      {/* CONNECT */}
+      <div className="mt-6 flex justify-center">
         <button
           onClick={handleConnect}
           disabled={connecting}
-          className={`px-5 py-2 mt-5 md:mt-0 rounded-md font-semibold shadow ${
+          className={`px-6 py-3 rounded-lg font-semibold shadow ${
             connected
               ? "bg-green-500 text-black"
               : "bg-cyan-600 text-black hover:bg-cyan-500"
@@ -172,37 +183,26 @@ export default function Controls() {
             onChange={(e) => handleServo(e.target.value)}
             className="w-full accent-cyan-500"
           />
-          <div className="flex justify-around mt-3">
-            {[0, 90, 180].map((a) => (
-              <button
-                key={a}
-                onClick={() => handleServo(a)}
-                className="px-3 py-1 bg-white/10 rounded-md hover:bg-white/20"
-              >
-                {a}°
-              </button>
-            ))}
-          </div>
         </div>
 
         {/* CAMERA + JOYSTICK */}
-        <div className="flex flex-col items-center justify-center gap-8">
+        <div className="flex flex-col items-center gap-8">
           <div className="w-[380px] h-[280px] md:w-[520px] md:h-[360px] bg-black/60 border-4 border-cyan-500 rounded-2xl shadow-2xl overflow-hidden">
             {connected ? (
               <img
-                src={`${camIp}/stream`}
+                src={`/cam/frame?t=${Date.now()}`}
                 alt="ESP32-CAM"
                 className="object-cover w-full h-full"
               />
             ) : (
               <p className="text-gray-300 text-sm flex items-center justify-center h-full">
-                Camera Not Connected
+                Camera Offline
               </p>
             )}
           </div>
 
           {/* JOYSTICK */}
-          <div className="grid grid-cols-3 gap-5 mt-4">
+          <div className="grid grid-cols-3 gap-5">
             <div />
             <JoystickButton
               icon="⬆"
@@ -215,11 +215,7 @@ export default function Controls() {
               onMouseDown={() => sendCommand("left")}
               onMouseUp={stopMovement}
             />
-            <JoystickButton
-              icon="⛔"
-              color="red"
-              onClick={stopMovement}
-            />
+            <JoystickButton icon="⛔" color="red" onClick={stopMovement} />
             <JoystickButton
               icon="➡"
               onMouseDown={() => sendCommand("right")}
@@ -234,26 +230,18 @@ export default function Controls() {
             <div />
           </div>
 
-          {/* ACCELERATOR SLIDER */}
-          <div className="mt-4 w-56">
+          {/* ACCELERATOR */}
+          <div className="w-56">
             <label className="text-sm text-gray-300">Accelerator</label>
             <input
               type="range"
               min="0"
               max="100"
               value={accelerator}
-              onChange={(e) => setAccelerator(parseInt(e.target.value))}
+              onChange={(e) => setAccelerator(+e.target.value)}
               className="w-full accent-cyan-500"
             />
             <p className="text-sm text-gray-300 text-center">{accelerator}%</p>
-          </div>
-
-          {/* SPEED METER */}
-          <div className="mt-2 w-56 bg-white/20 rounded-full h-3 relative">
-            <div
-              className="bg-cyan-500 h-3 rounded-full transition-all"
-              style={{ width: `${speedRef.current}%` }}
-            />
           </div>
         </div>
 
@@ -273,7 +261,7 @@ export default function Controls() {
   );
 }
 
-/* COMPONENTS */
+/* ===================== COMPONENTS ===================== */
 const JoystickButton = ({ icon, onClick, onMouseDown, onMouseUp, color = "cyan" }) => (
   <motion.button
     whileHover={{ scale: 1.15 }}
